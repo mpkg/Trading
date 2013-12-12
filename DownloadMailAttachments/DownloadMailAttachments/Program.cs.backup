@@ -1,0 +1,844 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.IO;
+using System.Data;
+using System.Data.OleDb;
+using Lesnikowski.Client;
+using Lesnikowski.Client.IMAP;
+using Lesnikowski.Mail;
+using Lesnikowski.Mail.Fluent;
+using Lesnikowski.Mail.Headers;
+using Lesnikowski.Mail.Headers.Constants;
+using System.Net.Mail;
+using System.Net;
+using org.pdfbox.pdmodel;
+using org.pdfbox.util;
+using iTextSharp.text.pdf;
+using iTextSharp.text.pdf.parser;
+
+namespace DownloadMailAttachments
+{
+    class Program
+    {
+        static string filename = string.Empty;
+        static int packlistcount = 0, invoicecount = 0;
+        static StringBuilder packlistfiles = new StringBuilder();        
+        static StringBuilder invoicefiles = new StringBuilder();
+        static string accessConnStr = Properties.Settings.Default.AccessConnection;
+        static string excelConnStr;
+        static int processedcount = 0, unprocessedcount = 0, filesprocessed = 0;
+        static StringBuilder sb = new StringBuilder();        
+
+        static void Main(string[] args)
+        {
+            Console.WriteLine("Downloading Packlists...Please Wait...Dont close this window");
+            packlistfiles.AppendLine();
+            invoicefiles.AppendLine();
+            LESNIKOWSKIMethod();
+            //IMAPXMethod();
+            Console.WriteLine("Download Complete.");
+            ProcessBhaskarPacklists();
+            //ProcessKGPacklists();
+            Console.Write("Process Complete...Press any key to continue");
+            Console.Read();
+        }
+
+        
+
+        static private void LESNIKOWSKIMethod()
+        {
+            using (Imap imap = new Imap())
+            {
+                try
+                {
+                    imap.Connect("imap.gmail.com", 993, true);
+                    imap.UseBestLogin(Properties.Settings.Default.UserName, Properties.Settings.Default.Password);
+                    imap.SelectInbox();
+                    List<long> uidList = imap.SearchFlag(Flag.Unseen);
+                    foreach (long uid in uidList)
+                    {
+                        try
+                        {
+                            IMail email = new MailBuilder()
+                                .CreateFromEml(imap.GetMessageByUID(uid));
+                            // save all attachments to disk
+                            packlistcount = 0;
+                            invoicecount = 0;
+
+                            foreach (MimeData attachment in email.Attachments)
+                            {
+                                filename = attachment.SafeFileName;
+                                if (!attachment.SafeFileName.Contains("inv"))
+                                {
+                                attachment.Save(Properties.Settings.Default.SavePath + attachment.SafeFileName);
+                                packlistcount++;
+                                packlistfiles.AppendLine(attachment.SafeFileName);
+                                }
+                                else if (attachment.SafeFileName.Contains("inv"))
+                                {
+                                    attachment.Save(Properties.Settings.Default.InvoiceSavePath + attachment.SafeFileName);
+                                    invoicecount++;
+                                    invoicefiles.AppendLine(attachment.SafeFileName);
+                                }
+                            }
+
+                            Console.WriteLine("Packlists of " + email.Date + " saved");
+                            SendMail(email.Date.ToString());
+
+                        }
+                        catch (Exception ex)
+                        {
+                            WriteToDownlaodLog(filename, ex.Message);
+                            continue;
+                        }
+                    }
+                    imap.Close();
+                }
+                catch (Exception ex)
+                {
+                    WriteToDownlaodLog(filename, ex.Message);
+                }
+            }
+        }
+
+        /*
+        static private void IMAPXMethod()
+        {            
+            try
+            {
+                ImapX.ImapClient client = new ImapX.ImapClient("imap.gmail.com", 993, true);
+                
+                bool result = false;
+
+                result = client.Connection();
+
+                result = client.LogIn(Properties.Settings.Default.UserName, Properties.Settings.Default.Password);
+
+                ImapX.MessageCollection mc = client.Folders["INBOX"].Search("UNSEEN", true);
+
+                foreach (ImapX.Message m in mc)
+                {
+                    packlistcount = 0;
+                    List<ImapX.Attachment> attachments = m.Attachments;
+
+                    foreach (ImapX.Attachment attachment in attachments)
+                    {
+
+                        if (!attachment.FileName.Contains("inv"))
+                        {
+                            filename = attachment.FileName;
+                            attachment.SaveFile(Properties.Settings.Default.SavePath);
+                            packlistcount++;
+                        }
+                    }                    
+                    m.SetFlag(ImapX.ImapFlags.SEEN);
+                    Console.WriteLine("Packlists of " + m.Date.ToString() + " saved");
+                    SendMail(m.Date.ToString());
+                }
+                client.LogOut();
+                client.Disconnect();
+            }
+            catch (Exception ex)
+            {
+                WriteToDownlaodLog(filename, ex.Message);
+                SendMail(filename + "-" + ex.Message);
+            }
+        }*/
+
+        static private void ProcessBhaskarPacklists()
+        {
+            string invoiceno = string.Empty,
+                    dispatchno = string.Empty,
+                    lrno = string.Empty,
+                    partyname = string.Empty,
+                    soldto = string.Empty,
+                    item = string.Empty,
+                    dispatchdate = string.Empty,
+                    transporter = string.Empty,
+                    truckno = string.Empty;
+            string sno = string.Empty;
+            string sortno = string.Empty;
+            string rollno = string.Empty;
+            string shade = string.Empty;
+            string grade = string.Empty;
+            decimal mtrs = decimal.Zero;
+            decimal netweight = decimal.Zero;
+            decimal grossweight = decimal.Zero;
+            int pieces = 1;
+            int[] piece = new int[6];
+            int totalrolls = 0;
+            sb.AppendLine();
+            string[] split = new string[] { "\r\n" };
+            int recordno, errorflag;
+
+            DataTable dtPacklist = new DataTable();
+            dtPacklist.TableName = "Packlist";
+            OleDbConnection accessConn = new OleDbConnection(accessConnStr);
+            OleDbCommand cmd = new OleDbCommand();
+            cmd.Connection = accessConn;
+            cmd.CommandType = CommandType.Text;
+            accessConn.Open();
+
+            #region read invoice pdf
+            /*
+            string[] invfiles = Directory.GetFiles(Properties.Settings.Default.invlocation);
+            
+            for (int l = 0; l < invfiles.Length; l++)
+            {
+                string invfilename = Path.GetFileName(invfiles[l]);
+                char[] invfilenamechars = invfilename.ToCharArray();
+                int invoiceparse = 0, lrparse = 0;
+                PDDocument inv = PDDocument.load(invfiles[l]);
+                PDFTextStripper invstripper = new PDFTextStripper();
+                int a;
+                string[] invcontents = invstripper.getText(inv).Split(split, StringSplitOptions.None);                
+            }
+                /*
+                for (a = 0; a < invcontents.Length; a++)
+                {
+                    if (invcontents[a].ToLower().Equals("l.r. no"))
+                        break;
+                }
+                invoiceno = invcontents[a + 1];
+
+                lrno = invcontents[a + 6];
+
+                transporter = invcontents[a + 8];
+
+                truckno = invcontents[a + 9];
+
+                if (truckno.ToLower().StartsWith("inv"))
+                    truckno = "";
+
+                if (!Int32.TryParse(invoiceno, out invoiceparse)
+                    || !Int32.TryParse(lrno, out lrparse)
+                    || (!truckno.ToLower().StartsWith("mp") && !truckno.ToLower().StartsWith("mh") && truckno.Length != 0)
+                    || !transporter.ToLower().StartsWith("st"))
+                    continue;
+               
+            cmd.CommandText = @"update PackingList set LRNo = ''";
+                                // "' WHERE InvoiceNo = '" + invoiceno + "'";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = @"update PackingList set Transporter = ''";
+                                //"' WHERE InvoiceNo = '" + invoiceno + "'";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = @"update PackingList set TruckNo = ''";
+                                //"' WHERE InvoiceNo = '" + invoiceno + "'";
+            cmd.ExecuteNonQuery();
+                //File.Move(invfiles[l], Properties.Settings.Default.processedfilelocation + Path.GetFileName(invfiles[l]));
+            */
+            #endregion
+
+            string[] files = Directory.GetFiles(Properties.Settings.Default.SavePath);
+            for (int j = 0; j < files.Length; j++)
+            {
+                try
+                {
+                    string path = Path.GetFileName(files[j]);
+                    Console.WriteLine("Processing File: " + path);
+                    int listcounter = 0;
+                    errorflag = 0;
+                    dtPacklist.Reset();
+
+                    if (files[j].ToLower().EndsWith("pdf"))
+                    {
+                        try
+                        {
+                            PDDocument doc = PDDocument.load(files[j]);
+                            PDFTextStripper stripper = new PDFTextStripper();
+                            string[] contents = stripper.getText(doc).Split(split, StringSplitOptions.None);
+
+                            dtPacklist.Columns.Add("F1", typeof(string));
+                            dtPacklist.Columns.Add("F2", typeof(string));
+                            dtPacklist.Columns.Add("F3", typeof(string));
+                            dtPacklist.Columns.Add("F4", typeof(string));
+                            dtPacklist.Columns.Add("F5", typeof(string));
+                            dtPacklist.Columns.Add("F6", typeof(string));
+                            dtPacklist.Columns.Add("F7", typeof(string));
+                            dtPacklist.Columns.Add("F8", typeof(string));
+                            dtPacklist.Columns.Add("F9", typeof(string));
+                            dtPacklist.Columns.Add("F10", typeof(string));
+                            dtPacklist.Columns.Add("F11", typeof(string));
+                            dtPacklist.Columns.Add("F12", typeof(string));
+                            dtPacklist.Columns.Add("F13", typeof(decimal));
+                            dtPacklist.Columns.Add("F14", typeof(decimal));
+                            dtPacklist.Columns.Add("F15", typeof(decimal));
+
+                            invoiceno = string.Empty;
+                            char[] filenamechars = path.ToCharArray();
+                            int k;
+                            for (int i = 0; i < filenamechars.Length; i++)
+                            {
+                                if (Int32.TryParse(filenamechars[i].ToString(), out k))
+                                {
+                                    invoiceno = invoiceno + filenamechars[i].ToString();
+                                }
+                            }
+                            totalrolls = Convert.ToInt32(contents[0]);
+                            partyname = contents[9].Trim();
+                            dispatchdate = contents[2].Trim().Replace('.', '/');
+                            dispatchno = contents[3].Trim();
+                            int rowcounter = 17;
+                            while (totalrolls > 0)
+                            {
+                                string[] rowcontent = contents[rowcounter].Split();
+                                object[] row = new object[] { rowcontent[0], rowcontent[1], rowcontent[2], rowcontent[4].ToLower().Contains("fresh") ? rowcontent[3] : "", rowcontent[4].ToLower().Contains("fresh") ? rowcontent[4] : rowcontent[3], rowcontent[4].ToLower().Contains("fresh") ? rowcontent[5] : rowcontent[4], "", "", "", "", "", "", rowcontent[rowcontent.Length - 3], rowcontent[rowcontent.Length - 2], rowcontent[rowcontent.Length - 1] };
+                                dtPacklist.Rows.Add(row);
+                                if (rowcounter == 56)
+                                    rowcounter = 73;
+                                rowcounter++;
+                                totalrolls--;
+                            }
+                            doc.close();
+                        }
+                        catch (Exception ex)
+                        {
+                            WriteToImportLog(files[j], ex.Message, "");
+                            errorflag = 1;
+                            unprocessedcount++;
+                            sb.AppendLine(path + "-" + ex.Message);
+                            continue;
+                        }
+                    }
+
+                    #region process excel
+                    else if (files[j].ToLower().EndsWith("xls"))
+                    {
+                        excelConnStr = "Provider=Microsoft.Jet.OLEDB.4.0;Data Source=" + files[j] + ";Extended Properties=\"Excel 8.0;HDR=No;IMEX=1\"";
+                        OleDbCommand excelCommand = new OleDbCommand();
+                        OleDbDataAdapter excelDataAdapter = new OleDbDataAdapter();
+                        OleDbConnection excelConn = new OleDbConnection(excelConnStr);
+
+                        excelConn.Open();
+
+                        excelCommand = new OleDbCommand("SELECT * FROM [Sheet1$]", excelConn);
+
+                        excelDataAdapter.SelectCommand = excelCommand;
+
+                        excelDataAdapter.Fill(dtPacklist);
+
+                        excelConn.Close();
+
+                        partyname = dtPacklist.Rows[6]["F2"].ToString().Trim();
+                        dispatchdate = dtPacklist.Rows[4]["F4"].ToString().Trim().Replace('.', '/');
+                        dispatchno = dtPacklist.Rows[5]["F4"].ToString().Trim();
+                        invoiceno = path.Substring(path.Length - 9, 5);
+                        listcounter = 11;
+                    }
+                    #endregion
+
+                    recordno = 1;
+                    DateTime dispatchdt = new DateTime();
+                    IFormatProvider culture = new System.Globalization.CultureInfo("fr-FR", true);
+                    dispatchdt = DateTime.Parse(dispatchdate, culture);
+                    while (listcounter < dtPacklist.Rows.Count)
+                    {
+                        try
+                        {
+                            if (dtPacklist.Rows[listcounter]["F1"] != System.DBNull.Value)
+                            {
+                                sno = dtPacklist.Rows[listcounter]["F1"].ToString().Trim();
+                            }
+                            else
+                            {
+                                break;
+                            }
+                            if (dtPacklist.Rows[listcounter]["F2"] != System.DBNull.Value)
+                            {
+                                sortno = dtPacklist.Rows[listcounter]["F2"].ToString().Trim();
+                            }
+                            else
+                            {
+                                WriteToImportLog(files[j], recordno.ToString(), "sortno");
+                                sb.AppendLine("Sort No " + Path.GetFileName(files[j]) + recordno.ToString());
+                                errorflag = 1;
+                                listcounter++;
+                                recordno++;
+                                continue;
+                            }
+
+                            if (dtPacklist.Rows[listcounter]["F3"] != System.DBNull.Value)
+                            {
+                                rollno = dtPacklist.Rows[listcounter]["F3"].ToString().Trim();
+                            }
+                            else
+                            {
+                                WriteToImportLog(files[j], recordno.ToString(), "rollno");
+                                sb.AppendLine("rollno " + Path.GetFileName(files[j]) + recordno.ToString());
+                                errorflag = 1;
+                                listcounter++;
+                                recordno++;
+                                continue;
+                            }
+
+                            if (dtPacklist.Rows[listcounter]["F4"] != System.DBNull.Value)
+                            {
+                                shade = dtPacklist.Rows[listcounter]["F4"].ToString().Trim();
+                            }
+
+                            if (dtPacklist.Rows[listcounter]["F5"] != System.DBNull.Value)
+                            {
+                                grade = dtPacklist.Rows[listcounter]["F5"].ToString().Trim();
+                            }
+                            else
+                            {
+                                WriteToImportLog(files[j], recordno.ToString(), "grade");
+                                sb.AppendLine("grade " + Path.GetFileName(files[j]) + recordno.ToString());
+                                errorflag = 1;
+                                listcounter++;
+                                recordno++;
+                                continue;
+                            }
+
+                            if (dtPacklist.Rows[listcounter]["F6"] != System.DBNull.Value)
+                            {
+                                pieces = Convert.ToInt32(dtPacklist.Rows[listcounter]["F6"].ToString().Trim());                                                                
+                            }
+                            else
+                            {
+                                WriteToImportLog(files[j], recordno.ToString(), "pieces");
+                                sb.AppendLine("pieces " + Path.GetFileName(files[j]) + recordno.ToString());
+                                errorflag = 1;
+                                listcounter++;
+                                recordno++;
+                                continue;
+                            }
+
+                            if (dtPacklist.Rows[listcounter]["F13"] != System.DBNull.Value)
+                            {
+                                mtrs = Convert.ToDecimal(dtPacklist.Rows[listcounter]["F13"].ToString().Trim());
+                            }
+                            else
+                            {
+                                WriteToImportLog(files[j], recordno.ToString(), "mtrs");
+                                sb.AppendLine("mtrs " + Path.GetFileName(files[j]) + recordno.ToString());
+                                errorflag = 1;
+                                listcounter++;
+                                recordno++;
+                                continue;
+                            }
+
+                            if (dtPacklist.Rows[listcounter]["F14"] != System.DBNull.Value)
+                            {
+                                netweight = Convert.ToDecimal(dtPacklist.Rows[listcounter]["F14"].ToString().Trim());
+                            }
+                            else
+                            {
+                                WriteToImportLog(files[j], recordno.ToString(), "netweight");
+                                sb.AppendLine("netweight " + Path.GetFileName(files[j]) + recordno.ToString());
+                                errorflag = 1;
+                                listcounter++;
+                                recordno++;
+                                continue;
+                            }
+
+                            if (dtPacklist.Rows[listcounter]["F15"] != System.DBNull.Value)
+                            {
+                                grossweight = Convert.ToDecimal(dtPacklist.Rows[listcounter]["F15"].ToString().Trim());
+                            }
+                            else
+                            {
+                                WriteToImportLog(files[j], recordno.ToString(), "grossweight");
+                                sb.AppendLine("grossweight " + files[j] + recordno.ToString());
+                                errorflag = 1;
+                                listcounter++;
+                                recordno++;
+                                continue;
+                            }
+
+                            cmd.CommandText = "INSERT INTO PackingList VALUES(" + sno + ",'" + sortno + "','" + rollno + "','" + shade + "','" + grade + "'," + pieces + "," + mtrs + "," + netweight + "," + grossweight + ",'" + partyname + "','" + dispatchdt.ToShortDateString() + "','" + dispatchno + "','','" + invoiceno + "','null',0.0,'01/01/2000','','','" + DateTime.Now.ToShortDateString() + "')";
+                            cmd.ExecuteNonQuery();
+
+                            sno = string.Empty;
+                            sortno = string.Empty;
+                            rollno = string.Empty;
+                            shade = string.Empty;
+                            grade = string.Empty;
+                            mtrs = decimal.Zero;
+                            netweight = decimal.Zero;
+                            grossweight = decimal.Zero;
+                            pieces = 1;
+                            processedcount++;
+                            listcounter++;
+                            recordno++;
+                        }
+                        catch (Exception ex)
+                        {
+                            WriteToImportLog(files[j], recordno.ToString(), ex.Message);
+                            sb.AppendLine(Path.GetFileName(files[j]) + "-" + recordno.ToString() + ex.Message);
+                            errorflag = 1;
+                            unprocessedcount++;
+                            listcounter++;
+                            recordno++;
+                            continue;
+                        }
+                    }
+                    if (errorflag == 0)
+                    {
+                        File.Move(files[j], Properties.Settings.Default.processedfilelocation + Path.GetFileName(files[j]));
+                        cmd.CommandText = "INSERT INTO ProcessedFiles VALUES('" + Properties.Settings.Default.processedfilelocation + Path.GetFileName(files[j]) + "','" + DateTime.UtcNow.ToLocalTime() + "')";
+                        cmd.ExecuteNonQuery();
+                        filesprocessed++;
+                        sb.AppendLine("Processed File -" + Path.GetFileName(files[j]));
+                        invoiceno = string.Empty;
+
+                    }
+
+                    Console.WriteLine("Processed file: " + path);
+                }
+                catch (Exception ex)
+                {
+                    WriteToImportLog(files[j], "PDF/Excel Processing Error", ex.Message);
+                    unprocessedcount++;
+                    continue;
+                }
+            }
+            accessConn.Close();
+            try
+            {
+                SendMail("Files Processed: " + filesprocessed.ToString() + "\n\rRecords: Processed " + processedcount + " / Unprocessed " + unprocessedcount + " " + sb.ToString());
+            }
+            catch (Exception ex)
+            {
+
+            }
+        }
+
+        private static void ProcessKGPacklists()
+        {
+            //Table Columns
+            string
+                docno = string.Empty,
+                direfno = string.Empty,
+                sortno = string.Empty,
+                rollno = string.Empty,
+                shade = string.Empty,
+                grade = string.Empty,
+                pieceno = string.Empty,
+                inwardno = string.Empty,
+                soldto = string.Empty,
+                dispatchdate = string.Empty,
+                saledate = string.Empty,
+                challanreference = string.Empty,
+                datemodified = string.Empty;
+            int
+                pieces = 1;
+            decimal
+                meters = decimal.Zero,
+                netweight = decimal.Zero,
+                grossweight = decimal.Zero,
+                rate = decimal.Zero;
+
+            //Other variables            
+            string[] split = new string[] { "\n" };
+            int recordno, errorflag;
+            sb.AppendLine();
+
+            DataTable dtPacklist = new DataTable();
+            dtPacklist.TableName = "Packlist";
+            OleDbConnection accessConn = new OleDbConnection(accessConnStr);
+            OleDbCommand cmd = new OleDbCommand();
+            cmd.Connection = accessConn;
+            cmd.CommandType = CommandType.Text;
+            accessConn.Open();
+
+            string[] files = Directory.GetFiles(Properties.Settings.Default.KGPacklistSavePath);
+            for (int j = 0; j < files.Length; j++)
+            {
+                try
+                {
+                    if (files[j].ToLower().EndsWith("pdf"))
+                    {
+                        filename = Path.GetFileName(files[j]);
+                        Console.WriteLine("Processing File: " + filename);
+                        int listcounter = 0;
+                        errorflag = 0;
+                        dtPacklist.Reset();
+                        try
+                        {
+                            PdfReader reader = new PdfReader(files[j]);
+                            string pdftext = string.Empty;
+                            for (int i = 1; i < reader.NumberOfPages; i++)
+                            {
+                                pdftext = pdftext + PdfTextExtractor.GetTextFromPage(reader, i);
+                            }
+                            string[] contents = pdftext.Split(split, StringSplitOptions.None);
+                            reader.Close();
+
+                            dtPacklist.Columns.Add("F1", typeof(string));
+                            dtPacklist.Columns.Add("F2", typeof(string));
+                            dtPacklist.Columns.Add("F3", typeof(string));
+                            dtPacklist.Columns.Add("F4", typeof(string));
+                            dtPacklist.Columns.Add("F5", typeof(string));
+                            dtPacklist.Columns.Add("F6", typeof(string));
+                            dtPacklist.Columns.Add("F7", typeof(string));
+                            dtPacklist.Columns.Add("F8", typeof(string));
+                            dtPacklist.Columns.Add("F9", typeof(string));
+                            dtPacklist.Columns.Add("F10", typeof(string));
+                            dtPacklist.Columns.Add("F11", typeof(string));
+                            dtPacklist.Columns.Add("F12", typeof(string));
+                            dtPacklist.Columns.Add("F13", typeof(decimal));
+                            dtPacklist.Columns.Add("F14", typeof(decimal));
+                            dtPacklist.Columns.Add("F15", typeof(decimal));
+                            
+                            dispatchdate = contents[2].Trim().Replace('.', '/');
+                            int totalrolls = 0;
+                            int rowcounter = 17;
+                            while (totalrolls > 0)
+                            {
+                                string[] rowcontent = contents[rowcounter].Split();
+                                object[] row = new object[] 
+                                { 
+                                    rowcontent[0], 
+                                    rowcontent[1],
+                                    rowcontent[2], 
+                                    rowcontent[4].ToLower().Contains("fresh") ? rowcontent[3] : "", 
+                                    rowcontent[4].ToLower().Contains("fresh") ? rowcontent[4] : rowcontent[3], 
+                                    rowcontent[4].ToLower().Contains("fresh") ? rowcontent[5] : rowcontent[4], 
+                                    "", 
+                                    "", 
+                                    "", 
+                                    "", 
+                                    "", 
+                                    "", 
+                                    rowcontent[rowcontent.Length - 3], 
+                                    rowcontent[rowcontent.Length - 2], 
+                                    rowcontent[rowcontent.Length - 1] 
+                                };
+                                dtPacklist.Rows.Add(row);
+                                if (rowcounter == 56)
+                                    rowcounter = 73;
+                                rowcounter++;
+                                totalrolls--;
+                            }                            
+                        }
+                        catch (Exception ex)
+                        {
+                            WriteToImportLog(files[j], ex.Message, "");
+                            errorflag = 1;
+                            unprocessedcount++;
+                            sb.AppendLine(filename + "-" + ex.Message);
+                            continue;
+                        }
+                    }   
+
+                    /*
+                    recordno = 1;
+                    DateTime dispatchdt = new DateTime();
+                    IFormatProvider culture = new System.Globalization.CultureInfo("fr-FR", true);
+                    dispatchdt = DateTime.Parse(dispatchdate, culture);
+                    while (listcounter < dtPacklist.Rows.Count)
+                    {
+                        try
+                        {
+                            if (dtPacklist.Rows[listcounter]["F1"] != System.DBNull.Value)
+                            {
+                                sno = dtPacklist.Rows[listcounter]["F1"].ToString().Trim();
+                            }
+                            else
+                            {
+                                break;
+                            }
+                            if (dtPacklist.Rows[listcounter]["F2"] != System.DBNull.Value)
+                            {
+                                sortno = dtPacklist.Rows[listcounter]["F2"].ToString().Trim();
+                            }
+                            else
+                            {
+                                WriteToImportLog(files[j], recordno.ToString(), "sortno");
+                                sb.AppendLine("Sort No " + Path.GetFileName(files[j]) + recordno.ToString());
+                                errorflag = 1;
+                                listcounter++;
+                                recordno++;
+                                continue;
+                            }
+
+                            if (dtPacklist.Rows[listcounter]["F3"] != System.DBNull.Value)
+                            {
+                                rollno = dtPacklist.Rows[listcounter]["F3"].ToString().Trim();
+                            }
+                            else
+                            {
+                                WriteToImportLog(files[j], recordno.ToString(), "rollno");
+                                sb.AppendLine("rollno " + Path.GetFileName(files[j]) + recordno.ToString());
+                                errorflag = 1;
+                                listcounter++;
+                                recordno++;
+                                continue;
+                            }
+
+                            if (dtPacklist.Rows[listcounter]["F4"] != System.DBNull.Value)
+                            {
+                                shade = dtPacklist.Rows[listcounter]["F4"].ToString().Trim();
+                            }
+
+                            if (dtPacklist.Rows[listcounter]["F5"] != System.DBNull.Value)
+                            {
+                                grade = dtPacklist.Rows[listcounter]["F5"].ToString().Trim();
+                            }
+                            else
+                            {
+                                WriteToImportLog(files[j], recordno.ToString(), "grade");
+                                sb.AppendLine("grade " + Path.GetFileName(files[j]) + recordno.ToString());
+                                errorflag = 1;
+                                listcounter++;
+                                recordno++;
+                                continue;
+                            }
+
+                            if (dtPacklist.Rows[listcounter]["F6"] != System.DBNull.Value)
+                            {
+                                pieces = Convert.ToInt32(dtPacklist.Rows[listcounter]["F6"].ToString().Trim());
+                            }
+                            else
+                            {
+                                WriteToImportLog(files[j], recordno.ToString(), "pieces");
+                                sb.AppendLine("pieces " + Path.GetFileName(files[j]) + recordno.ToString());
+                                errorflag = 1;
+                                listcounter++;
+                                recordno++;
+                                continue;
+                            }
+
+                            if (dtPacklist.Rows[listcounter]["F13"] != System.DBNull.Value)
+                            {
+                                meters = Convert.ToDecimal(dtPacklist.Rows[listcounter]["F13"].ToString().Trim());
+                            }
+                            else
+                            {
+                                WriteToImportLog(files[j], recordno.ToString(), "mtrs");
+                                sb.AppendLine("mtrs " + Path.GetFileName(files[j]) + recordno.ToString());
+                                errorflag = 1;
+                                listcounter++;
+                                recordno++;
+                                continue;
+                            }
+
+                            if (dtPacklist.Rows[listcounter]["F14"] != System.DBNull.Value)
+                            {
+                                netweight = Convert.ToDecimal(dtPacklist.Rows[listcounter]["F14"].ToString().Trim());
+                            }
+                            else
+                            {
+                                WriteToImportLog(files[j], recordno.ToString(), "netweight");
+                                sb.AppendLine("netweight " + Path.GetFileName(files[j]) + recordno.ToString());
+                                errorflag = 1;
+                                listcounter++;
+                                recordno++;
+                                continue;
+                            }
+
+                            if (dtPacklist.Rows[listcounter]["F15"] != System.DBNull.Value)
+                            {
+                                grossweight = Convert.ToDecimal(dtPacklist.Rows[listcounter]["F15"].ToString().Trim());
+                            }
+                            else
+                            {
+                                WriteToImportLog(files[j], recordno.ToString(), "grossweight");
+                                sb.AppendLine("grossweight " + files[j] + recordno.ToString());
+                                errorflag = 1;
+                                listcounter++;
+                                recordno++;
+                                continue;
+                            }
+
+                            cmd.CommandText = "INSERT INTO PackingList VALUES(" + sno + ",'" + sortno + "','" + rollno + "','" + shade + "','" + grade + "'," + pieces + "," + meters + "," + netweight + "," + grossweight + ",'" + partyname + "','" + dispatchdt.ToShortDateString() + "','" + dispatchno + "','','" + invoiceno + "','null',0.0,'01/01/2000','','','" + DateTime.Now.ToShortDateString() + "')";
+                            cmd.ExecuteNonQuery();
+
+                            sno = string.Empty;
+                            sortno = string.Empty;
+                            rollno = string.Empty;
+                            shade = string.Empty;
+                            grade = string.Empty;
+                            meters = decimal.Zero;
+                            netweight = decimal.Zero;
+                            grossweight = decimal.Zero;
+                            pieces = 1;
+                            processedcount++;
+                            listcounter++;
+                            recordno++;
+                        }
+                        catch (Exception ex)
+                        {
+                            WriteToImportLog(files[j], recordno.ToString(), ex.Message);
+                            sb.AppendLine(Path.GetFileName(files[j]) + "-" + recordno.ToString() + ex.Message);
+                            errorflag = 1;
+                            unprocessedcount++;
+                            listcounter++;
+                            recordno++;
+                            continue;
+                        }
+                    }
+                    if (errorflag == 0)
+                    {
+                        File.Move(files[j], Properties.Settings.Default.processedfilelocation + Path.GetFileName(files[j]));
+                        cmd.CommandText = "INSERT INTO ProcessedFiles VALUES('" + Properties.Settings.Default.processedfilelocation + Path.GetFileName(files[j]) + "','" + DateTime.UtcNow.ToLocalTime() + "')";
+                        cmd.ExecuteNonQuery();
+                        filesprocessed++;
+                        sb.AppendLine("Processed File -" + Path.GetFileName(files[j]));
+                        invoiceno = string.Empty;
+
+                    }
+                    
+                    Console.WriteLine("Processed file: " + path);
+                    */
+                }
+                catch (Exception ex)
+                {
+                    WriteToImportLog(files[j], "PDF/Excel Processing Error", ex.Message);
+                    unprocessedcount++;
+                    continue;
+                }
+            }
+            accessConn.Close();
+            try
+            {
+                SendMail("Files Processed: " + filesprocessed.ToString() + "\n\rRecords: Processed " + processedcount + " / Unprocessed " + unprocessedcount + " " + sb.ToString());
+            }
+            catch (Exception ex)
+            {
+
+            }
+        }
+
+        static private void WriteToDownlaodLog(string file, string error)
+        {
+            using (StreamWriter sw = new StreamWriter(Properties.Settings.Default.ErrorLog + file + ".txt", true))
+            {
+                sw.WriteLine();
+                sw.WriteLine(error);
+            }
+        }
+
+        static private void WriteToImportLog(string file, string row, string error)
+        {
+            using (StreamWriter sw = new StreamWriter(Properties.Settings.Default.ErrorLog + Path.GetFileName(file) + ".txt", true))
+            {
+                sw.WriteLine();
+                sw.WriteLine(row + " - " + error);
+            }
+        }
+
+        static private void SendMail(string date)
+        {
+            StringBuilder sb = new StringBuilder();
+            System.Net.Mail.MailMessage message = new System.Net.Mail.MailMessage();
+            message.To.Add("mayank.gadodia87@gmail.com");
+            message.Subject = "Packlist Download Log";
+            message.From = new System.Net.Mail.MailAddress("update.inventory@gmail.com");
+            message.Body = packlistcount.ToString() + " Packlist files dt. " + date + " downloaded" + packlistfiles.ToString() + "\r\n" + invoicecount + invoicefiles.ToString();
+            System.Net.Mail.SmtpClient smtp = new System.Net.Mail.SmtpClient
+            {
+                Host = "smtp.gmail.com",
+                Port = 587,
+                EnableSsl = true,
+                DeliveryMethod = System.Net.Mail.SmtpDeliveryMethod.Network,
+                UseDefaultCredentials = false,
+                Credentials = new System.Net.NetworkCredential("update.inventory@gmail.com", "ganeshtextiles")
+            };
+            smtp.Send(message);
+        }
+    }
+}

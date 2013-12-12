@@ -1,0 +1,27 @@
+﻿<?xml version='1.0' encoding='utf-8'?>
+<SettingsFile xmlns="http://schemas.microsoft.com/VisualStudio/2004/01/settings" CurrentProfile="(Default)" GeneratedClassNamespace="CRMOnlineCRUD.Properties" GeneratedClassName="Settings">
+  <Profiles />
+  <Settings>
+    <Setting Name="UserName" Type="System.String" Scope="User">
+      <Value Profile="(Default)">update.inventory</Value>
+    </Setting>
+    <Setting Name="Password" Type="System.String" Scope="User">
+      <Value Profile="(Default)">mayankfabrics</Value>
+    </Setting>
+    <Setting Name="BhaskarPacklistSavePath" Type="System.String" Scope="User">
+      <Value Profile="(Default)">D:\Packlist\Bhaskar\Unprocessed\</Value>
+    </Setting>
+    <Setting Name="ErrorLog" Type="System.String" Scope="User">
+      <Value Profile="(Default)">D:\Packlist\Errors\</Value>
+    </Setting>
+    <Setting Name="BhaskarProcessedLocation" Type="System.String" Scope="User">
+      <Value Profile="(Default)">D:\Packlist\Bhaskar\Processed\</Value>
+    </Setting>
+    <Setting Name="EmailTo" Type="System.String" Scope="User">
+      <Value Profile="(Default)">mayank.gadodia87@gmail.com</Value>
+    </Setting>
+    <Setting Name="EmailFrom" Type="System.String" Scope="User">
+      <Value Profile="(Default)">update.inventory@gmail.com</Value>
+    </Setting>
+  </Settings>
+</SettingsFile>
