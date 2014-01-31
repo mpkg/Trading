@@ -1,0 +1,7 @@
+1. Connect to source Dynamics CRM
+2. Download Solution File-with settings
+3. Download Data in .csv format
+
+4. Connect to destination Dynamics CRM
+5. Import & Publish Solution
+6. Import Data
